@@ -28,12 +28,12 @@ jobs:
       - name: Build
         run: | 
           agvtool new-version -all $(git rev-parse HEAD)
-          make
+          make iphoneos
 
       - name: Get Version
         id: get_version
         run: |
-          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" _build/Payload/*.app/Info.plist)
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" _build/Payload/*.app/Info.plist || echo dev)
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Upload IPA
