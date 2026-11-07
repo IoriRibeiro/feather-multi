@@ -27,6 +27,7 @@ struct InstallPreviewView: View {
 	@State var isSharing: Bool
 	/// Set when installing as part of a Multi Open batch (e.g. "3 de 15").
 	var queueLabel: String?
+	@State private var _queueAdvanced = false
 	
 	init(app: AppInfoPresentable, isSharing: Bool = false, queueLabel: String? = nil) {
 		self.app = app
@@ -111,9 +112,17 @@ struct InstallPreviewView: View {
 		}
 		.onReceive(viewModel.$status) { newStatus in
 			// Multi Open: move on to the next copy automatically
-			guard queueLabel != nil else { return }
-			if case .completed = newStatus {
-				DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+			guard queueLabel != nil, !_queueAdvanced else { return }
+			
+			var shouldAdvance = false
+			if case .completed = newStatus { shouldAdvance = true }
+			// Server method: once iOS has downloaded the whole IPA the install
+			// continues on its own, so open the next copy right away.
+			if _installationMethod == 0, case .installing = newStatus { shouldAdvance = true }
+			
+			if shouldAdvance {
+				_queueAdvanced = true
+				DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
 					dismiss()
 				}
 			}

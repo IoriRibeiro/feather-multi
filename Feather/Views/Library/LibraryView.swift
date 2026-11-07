@@ -232,7 +232,10 @@ struct LibraryView: View {
 				}
 			}
 			.onReceive(NotificationCenter.default.publisher(for: MultiOpen.installNotification)) { notification in
-				_startInstallQueue(notification.userInfo?["identifiers"] as? [String] ?? [])
+				_startInstallQueue(
+					notification.userInfo?["identifiers"] as? [String] ?? [],
+					since: notification.userInfo?["since"] as? Date
+				)
 			}
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.installApp"))) { _ in
 				if let latest = _signedApps.first {
@@ -266,10 +269,22 @@ extension LibraryView {
 
 // MARK: - Extension: Multi Open install queue
 extension LibraryView {
-	private func _startInstallQueue(_ identifiers: [String]) {
-		// newest signed copy for each identifier, in the order they were signed
-		let uuids: [String] = identifiers.compactMap { id in
-			_signedApps.first(where: { $0.identifier == id })?.uuid
+	private func _startInstallQueue(_ identifiers: [String], since: Date?) {
+		// every copy signed in this batch, oldest first (1, 2, 3...)
+		var uuids: [String] = []
+		
+		if let since {
+			let request: NSFetchRequest<Signed> = Signed.fetchRequest()
+			request.predicate = NSPredicate(format: "date >= %@", since as NSDate)
+			request.sortDescriptors = [NSSortDescriptor(key: "date", ascending: true)]
+			uuids = ((try? Storage.shared.context.fetch(request)) ?? []).compactMap(\.uuid)
+		}
+		
+		// fallback: newest signed copy for each identifier
+		if uuids.isEmpty {
+			uuids = identifiers.compactMap { id in
+				_signedApps.first(where: { $0.identifier == id })?.uuid
+			}
 		}
 		guard !uuids.isEmpty else { return }
 
@@ -288,7 +303,9 @@ extension LibraryView {
 
 		let uuid = _multiQueue.pending.removeFirst()
 
-		guard let app = _signedApps.first(where: { $0.uuid == uuid }) else {
+		let request: NSFetchRequest<Signed> = Signed.fetchRequest()
+		request.predicate = NSPredicate(format: "uuid == %@", uuid)
+		guard let app = (try? Storage.shared.context.fetch(request))?.first else {
 			_presentNextInQueue()
 			return
 		}

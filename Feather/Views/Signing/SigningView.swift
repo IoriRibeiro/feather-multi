@@ -371,6 +371,7 @@ extension SigningView {
 		let icon = appIcon
 		let certificate = _selectedCert()
 		let start = _multiOpenStart
+		let batchStart = Date()
 		let count = _multiOpenCount
 		let installAfter = _multiOpenInstallAfter
 		let replaceOld = _multiOpenReplaceOld
@@ -407,11 +408,11 @@ extension SigningView {
 				}
 
 				if installAfter, !result.identifiers.isEmpty {
-					DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+					DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
 						NotificationCenter.default.post(
 							name: MultiOpen.installNotification,
 							object: nil,
-							userInfo: ["identifiers": result.identifiers]
+							userInfo: ["identifiers": result.identifiers, "since": batchStart]
 						)
 					}
 				}
