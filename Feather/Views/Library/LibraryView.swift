@@ -13,6 +13,7 @@ import NimbleViews
 struct LibraryView: View {
 	@StateObject var downloadManager = DownloadManager.shared
 	@StateObject var updateManager = UpdateManager.shared
+	@StateObject private var _multiQueue = MultiInstallQueue.shared
 	
 	@State private var _selectedInfoAppPresenting: AnyApp?
 	@State private var _selectedSigningAppPresenting: AnyApp?
@@ -187,8 +188,14 @@ struct LibraryView: View {
 			.sheet(item: $_selectedInfoAppPresenting) { app in
 				LibraryInfoView(app: app.base)
 			}
-			.sheet(item: $_selectedInstallAppPresenting) { app in
-				InstallPreviewView(app: app.base, isSharing: app.archive)
+			.sheet(item: $_selectedInstallAppPresenting, onDismiss: _presentNextInQueue) { app in
+				InstallPreviewView(
+					app: app.base,
+					isSharing: app.archive,
+					queueLabel: _multiQueue.isActive
+						? "\(_multiQueue.currentPosition) de \(_multiQueue.total)"
+						: nil
+				)
 					.presentationDetents([.height(200)])
 					.presentationDragIndicator(.visible)
 			}
@@ -224,6 +231,9 @@ struct LibraryView: View {
 					}
 				}
 			}
+			.onReceive(NotificationCenter.default.publisher(for: MultiOpen.installNotification)) { notification in
+				_startInstallQueue(notification.userInfo?["identifiers"] as? [String] ?? [])
+			}
 			.onReceive(NotificationCenter.default.publisher(for: Notification.Name("Feather.installApp"))) { _ in
 				if let latest = _signedApps.first {
 					_selectedInstallAppPresenting = AnyApp(base: latest)
@@ -250,6 +260,42 @@ extension LibraryView {
 		}
 		Button(.localized("Import from URL"), systemImage: "globe") {
 			_isDownloadingPresenting = true
+		}
+	}
+}
+
+// MARK: - Extension: Multi Open install queue
+extension LibraryView {
+	private func _startInstallQueue(_ identifiers: [String]) {
+		// newest signed copy for each identifier, in the order they were signed
+		let uuids: [String] = identifiers.compactMap { id in
+			_signedApps.first(where: { $0.identifier == id })?.uuid
+		}
+		guard !uuids.isEmpty else { return }
+
+		_multiQueue.pending = uuids
+		_multiQueue.total = uuids.count
+		_presentNextInQueue()
+	}
+
+	private func _presentNextInQueue() {
+		guard _multiQueue.isActive else { return }
+
+		guard !_multiQueue.pending.isEmpty else {
+			_multiQueue.reset()
+			return
+		}
+
+		let uuid = _multiQueue.pending.removeFirst()
+
+		guard let app = _signedApps.first(where: { $0.uuid == uuid }) else {
+			_presentNextInQueue()
+			return
+		}
+
+		// give the previous sheet time to fully dismiss
+		DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+			_selectedInstallAppPresenting = AnyApp(base: app)
 		}
 	}
 }

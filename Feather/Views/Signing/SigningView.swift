@@ -22,6 +22,14 @@ struct SigningView: View {
 	@State private var _isSigning = false
 	@State private var _selectedPhoto: PhotosPickerItem? = nil
 	@State var appIcon: UIImage?
+
+	// MARK: Multi Open
+	@AppStorage("Feather.multiOpen.enabled") private var _multiOpenEnabled = false
+	@AppStorage("Feather.multiOpen.start") private var _multiOpenStart = 1
+	@AppStorage("Feather.multiOpen.count") private var _multiOpenCount = 15
+	@AppStorage("Feather.multiOpen.installAfter") private var _multiOpenInstallAfter = true
+	@AppStorage("Feather.multiOpen.replaceOld") private var _multiOpenReplaceOld = true
+	@State private var _multiOpenProgress = 0
 	
 	// MARK: Fetch
 	@FetchRequest(
@@ -48,6 +56,7 @@ struct SigningView: View {
 		NBNavigationView("", displayMode: .inline) {
 			Form {
 				_customizationOptions(for: app)
+				_multiOpen(for: app)
 				_cert()
 				_customizationProperties(for: app)
 				
@@ -67,7 +76,7 @@ struct SigningView: View {
 							Button {
 								_start()
 							} label: {
-								NBSheetButton(title: .localized("Start Signing"), style: .prominent)
+								NBSheetButton(title: _startButtonTitle, style: .prominent)
 									.padding()
 							}
 							.buttonStyle(.plain)
@@ -189,6 +198,42 @@ extension SigningView {
 		}
 	}
 	
+	private var _startButtonTitle: String {
+		guard _multiOpenEnabled else { return .localized("Start Signing") }
+		if _isSigning {
+			return "Assinando \(_multiOpenProgress) de \(_multiOpenCount)…"
+		}
+		return "Assinar \(_multiOpenCount) cópias"
+	}
+
+	@ViewBuilder
+	private func _multiOpen(for app: AppInfoPresentable) -> some View {
+		let baseIdentifier = _temporaryOptions.appIdentifier ?? app.identifier ?? "app"
+		let baseName = _temporaryOptions.appName ?? app.name ?? "App"
+		let last = _multiOpenStart + _multiOpenCount - 1
+
+		Section {
+			Toggle(isOn: $_multiOpenEnabled) {
+				Label("App Multi Open", systemImage: "square.on.square")
+			}
+
+			if _multiOpenEnabled {
+				Stepper(value: $_multiOpenStart, in: 1...999) {
+					LabeledContent("Começar no", value: "\(_multiOpenStart)")
+				}
+				Stepper(value: $_multiOpenCount, in: 1...50) {
+					LabeledContent("Duplicar", value: "\(_multiOpenCount)x")
+				}
+				Toggle("Instalar todos depois de assinar", isOn: $_multiOpenInstallAfter)
+				Toggle("Substituir cópias antigas", isOn: $_multiOpenReplaceOld)
+			}
+		} footer: {
+			if _multiOpenEnabled {
+				Text("Vai criar \(MultiOpen.name(base: baseName, index: _multiOpenStart)) até \(MultiOpen.name(base: baseName, index: last)) (\(MultiOpen.identifier(base: baseIdentifier, index: _multiOpenStart)) … .\(last)). Para atualizar, assine a versão nova com os mesmos números: as cópias são atualizadas sem perder os dados.")
+			}
+		}
+	}
+
 	@ViewBuilder
 	private func _cert() -> some View {
 		NBSection(.localized("Signing")) {
@@ -278,7 +323,12 @@ extension SigningView {
 		let generator = UIImpactFeedbackGenerator(style: .light)
 		generator.impactOccurred()
 		_isSigning = true
-		
+
+		if _multiOpenEnabled {
+			_startMultiOpen()
+			return
+		}
+
 		FR.signPackageFile(
 			app,
 			using: _temporaryOptions,
@@ -309,6 +359,76 @@ extension SigningView {
 					}
 				}
 				dismiss()
+			}
+		}
+	}
+}
+
+// MARK: - Extension: Multi Open
+extension SigningView {
+	private func _startMultiOpen() {
+		let options = _temporaryOptions
+		let icon = appIcon
+		let certificate = _selectedCert()
+		let start = _multiOpenStart
+		let count = _multiOpenCount
+		let installAfter = _multiOpenInstallAfter
+		let replaceOld = _multiOpenReplaceOld
+		let baseIdentifier = options.appIdentifier ?? app.identifier ?? "app"
+
+		Task { @MainActor in
+			if replaceOld {
+				let ids = (start..<(start + count)).map {
+					MultiOpen.identifier(base: baseIdentifier, index: $0)
+				}
+				MultiOpen.removeSignedCopies(with: ids)
+			}
+
+			let result = await MultiOpen.signCopies(
+				of: app,
+				using: options,
+				icon: icon,
+				certificate: certificate,
+				start: start,
+				count: count
+			) { current in
+				_multiOpenProgress = current
+			}
+
+			_isSigning = false
+
+			let finish = {
+				if
+					options.post_deleteAppAfterSigned,
+					!app.isSigned,
+					!result.identifiers.isEmpty
+				{
+					Storage.shared.deleteApp(for: app)
+				}
+
+				if installAfter, !result.identifiers.isEmpty {
+					DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+						NotificationCenter.default.post(
+							name: MultiOpen.installNotification,
+							object: nil,
+							userInfo: ["identifiers": result.identifiers]
+						)
+					}
+				}
+				dismiss()
+			}
+
+			if result.failures.isEmpty {
+				finish()
+			} else {
+				let ok = UIAlertAction(title: .localized("Dismiss"), style: .cancel) { _ in
+					finish()
+				}
+				UIAlertController.showAlert(
+					title: "\(result.identifiers.count) de \(count) assinadas",
+					message: result.failures.joined(separator: "\n"),
+					actions: [ok]
+				)
 			}
 		}
 	}

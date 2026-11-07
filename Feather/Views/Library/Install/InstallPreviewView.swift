@@ -25,9 +25,12 @@ struct InstallPreviewView: View {
 	@StateObject var installer: ServerInstaller
 	
 	@State var isSharing: Bool
+	/// Set when installing as part of a Multi Open batch (e.g. "3 de 15").
+	var queueLabel: String?
 	
-	init(app: AppInfoPresentable, isSharing: Bool = false) {
+	init(app: AppInfoPresentable, isSharing: Bool = false, queueLabel: String? = nil) {
 		self.app = app
+		self.queueLabel = queueLabel
 		self.isSharing = isSharing
 		let viewModel = InstallerStatusViewModel(isIdevice: UserDefaults.standard.integer(forKey: "Feather.installationMethod") == 1)
 		self._viewModel = StateObject(wrappedValue: viewModel)
@@ -48,6 +51,21 @@ struct InstallPreviewView: View {
 			InstallProgressView(app: app, viewModel: viewModel)
 			_status()
 			_button()
+			if let queueLabel {
+				HStack {
+					Button("Parar fila") {
+						MultiInstallQueue.shared.reset()
+						dismiss()
+					}
+					.font(.footnote.weight(.semibold))
+					Spacer()
+					Text(queueLabel)
+						.font(.footnote.weight(.semibold))
+						.foregroundStyle(.secondary)
+				}
+				.padding()
+				.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+			}
 		}
 		.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 		.background(Color(UIColor.secondarySystemBackground))
@@ -88,6 +106,15 @@ struct InstallPreviewView: View {
 					#endif
 				default:
 					break
+				}
+			}
+		}
+		.onReceive(viewModel.$status) { newStatus in
+			// Multi Open: move on to the next copy automatically
+			guard queueLabel != nil else { return }
+			if case .completed = newStatus {
+				DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+					dismiss()
 				}
 			}
 		}
