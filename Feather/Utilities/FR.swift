@@ -285,6 +285,7 @@ enum MultiOpen {
 		certificate: CertificatePair?,
 		start: Int,
 		count: Int,
+		uniqueKeychain: Bool = false,
 		progress: @escaping (Int) -> Void
 	) async -> (identifiers: [String], failures: [String]) {
 		let baseIdentifier = baseOptions.appIdentifier ?? app.identifier ?? "app"
@@ -303,6 +304,18 @@ enum MultiOpen {
 			// never delete the source app or auto-install in the middle of a batch
 			options.post_deleteAppAfterSigned = false
 			options.post_installAppAfterSigned = false
+
+			// Without this every copy is signed with the exact same entitlements from the
+			// provisioning profile, so all copies (and their extensions) share one keychain
+			// and overwrite each other's keys.
+			if
+				uniqueKeychain,
+				baseOptions.appEntitlementsFile == nil,
+				let id = options.appIdentifier,
+				let file = keychainEntitlementsFile(for: id, certificate: certificate)
+			{
+				options.appEntitlementsFile = file
+			}
 
 			let error: Error? = await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
 				FR.signPackageFile(
@@ -323,6 +336,53 @@ enum MultiOpen {
 		}
 
 		return (signed, failures)
+	}
+
+	/// Writes the certificate's entitlements with a keychain group unique to `identifier`
+	/// (`TEAMID.identifier`). The first keychain group is the app's default one, so each copy
+	/// gets its own keychain. Allowed because the profile grants `TEAMID.*`.
+	@MainActor
+	static func keychainEntitlementsFile(for identifier: String, certificate: CertificatePair?) -> URL? {
+		guard
+			let certificate,
+			let profile = CertificateReader(Storage.shared.getFile(.provision, from: certificate)).decoded,
+			let team = profile.TeamIdentifier.first
+		else {
+			return nil
+		}
+
+		var entitlements: [String: Any] = (profile.Entitlements ?? [:]).mapValues { $0.value }
+
+		let existing = entitlements["keychain-access-groups"] as? [String] ?? []
+		guard existing.contains("\(team).*") else {
+			// profile doesn't allow arbitrary keychain groups, keep it as is
+			return nil
+		}
+
+		var groups = ["\(team).\(identifier)"]
+		if existing.contains("com.apple.token") {
+			groups.append("com.apple.token")
+		}
+		entitlements["keychain-access-groups"] = groups
+
+		guard let data = try? PropertyListSerialization.data(
+			fromPropertyList: entitlements,
+			format: .xml,
+			options: 0
+		) else {
+			return nil
+		}
+
+		let url = FileManager.default.temporaryDirectory
+			.appendingPathComponent("multiopen-\(identifier)-\(UUID().uuidString)")
+			.appendingPathExtension("plist")
+
+		do {
+			try data.write(to: url, options: .atomic)
+			return url
+		} catch {
+			return nil
+		}
 	}
 }
 

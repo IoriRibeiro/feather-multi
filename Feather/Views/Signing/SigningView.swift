@@ -29,6 +29,7 @@ struct SigningView: View {
 	@AppStorage("Feather.multiOpen.count") private var _multiOpenCount = 15
 	@AppStorage("Feather.multiOpen.installAfter") private var _multiOpenInstallAfter = true
 	@AppStorage("Feather.multiOpen.replaceOld") private var _multiOpenReplaceOld = true
+	@AppStorage("Feather.multiOpen.uniqueKeychain") private var _multiOpenUniqueKeychain = false
 	@State private var _multiOpenProgress = 0
 	
 	// MARK: Fetch
@@ -226,10 +227,11 @@ extension SigningView {
 				}
 				Toggle("Instalar todos depois de assinar", isOn: $_multiOpenInstallAfter)
 				Toggle("Substituir cópias antigas", isOn: $_multiOpenReplaceOld)
+				Toggle("Keychain separado por cópia", isOn: $_multiOpenUniqueKeychain)
 			}
 		} footer: {
 			if _multiOpenEnabled {
-				Text("Vai criar \(MultiOpen.name(base: baseName, index: _multiOpenStart)) até \(MultiOpen.name(base: baseName, index: last)) (\(MultiOpen.identifier(base: baseIdentifier, index: _multiOpenStart)) … .\(last)). Para atualizar, assine a versão nova com os mesmos números: as cópias são atualizadas sem perder os dados.")
+				Text("Vai criar \(MultiOpen.name(base: baseName, index: _multiOpenStart)) até \(MultiOpen.name(base: baseName, index: last)) (\(MultiOpen.identifier(base: baseIdentifier, index: _multiOpenStart)) … .\(last)). Para atualizar, assine a versão nova com os mesmos números: as cópias são atualizadas sem perder os dados." + (_multiOpenUniqueKeychain ? "\n\nKeychain separado: cada cópia guarda as próprias chaves. Ao ligar isso pela primeira vez em cópias já instaladas, pode ser preciso entrar de novo na conta." : ""))
 			}
 		}
 	}
@@ -375,6 +377,7 @@ extension SigningView {
 		let count = _multiOpenCount
 		let installAfter = _multiOpenInstallAfter
 		let replaceOld = _multiOpenReplaceOld
+		let uniqueKeychain = _multiOpenUniqueKeychain
 		let baseIdentifier = options.appIdentifier ?? app.identifier ?? "app"
 
 		Task { @MainActor in
@@ -391,7 +394,8 @@ extension SigningView {
 				icon: icon,
 				certificate: certificate,
 				start: start,
-				count: count
+				count: count,
+				uniqueKeychain: uniqueKeychain
 			) { current in
 				_multiOpenProgress = current
 			}
